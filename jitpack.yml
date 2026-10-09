@@ -3,4 +3,4 @@ jdk:
 before_install:
   - git config --global --add safe.directory /build
 install:
-  - ./gradlew :polyfence-core:publishToMavenLocal
+  - cd android && ./gradlew :polyfence-core:publishToMavenLocal

@@ -78,35 +78,39 @@ dependencies {
 
 mavenPublishing {
     publishToMavenCentral(com.vanniktech.maven.publish.SonatypeHost.CENTRAL_PORTAL)
-    signAllPublications()
 
-    coordinates(
-        groupId = "io.polyfence",
-        artifactId = "polyfence-core",
-        version = project.version.toString()
-    )
+        // Only sign when publishing to Maven Central, not for local/JitPack builds
+    if (!project.gradle.startParameter.taskNames.any { it.contains("publishToMavenLocal") }) {
+        signAllPublications()
 
-    pom {
-        name.set("Polyfence Core")
-        description.set("Mobile surface of the Polyfence geofence layer — on-device polygon and circle geofencing for Android. Same zones run on mobile, IoT, and server.")
-        url.set("https://github.com/polyfence/polyfence-core")
-        licenses {
-            license {
-                name.set("MIT License")
-                url.set("https://opensource.org/licenses/MIT")
-            }
-        }
-        developers {
-            developer {
-                id.set("polyfence")
-                name.set("Polyfence")
-                email.set("hello@polyfence.io")
-            }
-        }
-        scm {
-            connection.set("scm:git:git://github.com/polyfence/polyfence-core.git")
-            developerConnection.set("scm:git:ssh://github.com/polyfence/polyfence-core.git")
+        coordinates(
+            groupId = "io.polyfence",
+            artifactId = "polyfence-core",
+            version = project.version.toString()
+        )
+
+        pom {
+            name.set("Polyfence Core")
+            description.set("Mobile surface of the Polyfence geofence layer — on-device polygon and circle geofencing for Android. Same zones run on mobile, IoT, and server.")
             url.set("https://github.com/polyfence/polyfence-core")
+            licenses {
+                license {
+                    name.set("MIT License")
+                    url.set("https://opensource.org/licenses/MIT")
+                }
+            }
+            developers {
+                developer {
+                    id.set("polyfence")
+                    name.set("Polyfence")
+                    email.set("hello@polyfence.io")
+                }
+            }
+            scm {
+                connection.set("scm:git:git://github.com/polyfence/polyfence-core.git")
+                developerConnection.set("scm:git:ssh://github.com/polyfence/polyfence-core.git")
+                url.set("https://github.com/polyfence/polyfence-core")
+            }
         }
     }
 }

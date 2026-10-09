@@ -2072,8 +2072,8 @@ class LocationTracker : Service() {
 
     private fun createTrackingNotification(): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Polyfence Active")
-            .setContentText("Monitoring geofence zones")
+            .setContentTitle("FenceNotes")
+            .setContentText("Monitoring zones")
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)

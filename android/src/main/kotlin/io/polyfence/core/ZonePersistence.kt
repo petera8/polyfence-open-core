@@ -198,6 +198,25 @@ class ZonePersistence(private val context: Context) {
         return result
     }
 
+
+    /**
+     * Load the stored data map for a single zone, or null if absent.
+     * The returned map is exactly what was passed to saveZone() as zoneData,
+     * including the `metadata` sub-map.
+     */
+    fun loadZoneData(zoneId: String): Map<String, Any>? {
+        synchronized(lock) {
+            return try {
+                val savedZones = getSavedZones()
+                val zoneJson = savedZones[zoneId] ?: return null
+                jsonToMap(zoneJson.getJSONObject("data"))
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to load zone data for $zoneId: ${e.message}")
+                null
+            }
+        }
+    }
+
     // ============================================================================
     // ZONE STATE PERSISTENCE (Fix for exit detection after service restart)
     // ============================================================================

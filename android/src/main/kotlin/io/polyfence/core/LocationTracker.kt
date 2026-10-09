@@ -1746,142 +1746,142 @@ class LocationTracker : Service() {
     private var firstLocationAfterRestart = true
     private var hasReceivedFirstLocation = false
 
-private fun handleGeofenceEvent(zoneId: String, eventType: String, location: android.location.Location, detectionTimeMs: Double) {
-    // Get zone name from GeofenceEngine
-    val zoneName = geofenceEngine.getZoneName(zoneId) ?: zoneId
+    private fun handleGeofenceEvent(zoneId: String, eventType: String, location: android.location.Location, detectionTimeMs: Double) {
+        // Get zone name from GeofenceEngine
+        val zoneName = geofenceEngine.getZoneName(zoneId) ?: zoneId
 
-    // Get GPS accuracy
-    val gpsAccuracy = if (location.hasAccuracy()) location.accuracy.toDouble() else 0.0
+        // Get GPS accuracy
+        val gpsAccuracy = if (location.hasAccuracy()) location.accuracy.toDouble() else 0.0
 
-    // ML Telemetry: per-event enrichment
-    val speedMps = if (location.hasSpeed()) location.speed.toDouble() else 0.0
-    val activityType = activityRecognitionManager?.getCurrentActivity()?.name?.lowercase() ?: "unknown"
-    val distanceToBoundary = geofenceEngine.getDistanceToBoundary(zoneId, location)
+        // ML Telemetry: per-event enrichment
+        val speedMps = if (location.hasSpeed()) location.speed.toDouble() else 0.0
+        val activityType = activityRecognitionManager?.getCurrentActivity()?.name?.lowercase() ?: "unknown"
+        val distanceToBoundary = geofenceEngine.getDistanceToBoundary(zoneId, location)
 
-    // Record in centralized telemetry aggregator
-    telemetryAggregator.recordGeofenceEvent(
-        zoneId = zoneId,
-        eventType = eventType,
-        distanceM = distanceToBoundary,
-        speedMps = speedMps,
-        accuracyM = gpsAccuracy,
-        detectionTimeMs = detectionTimeMs
-    )
-
-    // Boundary crossings only: dwell and the signal-lost/restored pair are
-    // state changes, not crossings, and counting them would inflate a figure
-    // consumers read as "how many times did the user cross a zone".
-    //
-    // Counts what this engine detected in this process. A crossing captured
-    // by an OS wake fence while the process was dead is delivered on drain
-    // without passing through here, so it reaches the consumer uncounted —
-    // counting it at capture would attribute it to whichever process the
-    // broadcast woke, and counting it at drain risks doubling with the
-    // reconcile that follows. Both need deciding together rather than
-    // patching one side.
-    //
-    // A detection time of zero marks a crossing the engine synthesised
-    // outside a location evaluation — a degraded-GPS exit. The consumer
-    // receives it like any other, so it counts; it was never timed, so it is
-    // passed as absent rather than as zero, which would drag the mean toward
-    // a speed nothing achieved.
-    if (eventType == "ENTER" || eventType == "EXIT" ||
-        eventType == GeofenceEngine.EVENT_RECOVERY_ENTER ||
-        eventType == GeofenceEngine.EVENT_RECOVERY_EXIT
-    ) {
-        PolyfenceDebugCollector.recordZoneDetection(
-            if (detectionTimeMs > 0) detectionTimeMs else null
+        // Record in centralized telemetry aggregator
+        telemetryAggregator.recordGeofenceEvent(
+            zoneId = zoneId,
+            eventType = eventType,
+            distanceM = distanceToBoundary,
+            speedMps = speedMps,
+            accuracyM = gpsAccuracy,
+            detectionTimeMs = detectionTimeMs
         )
-    }
 
-    // Send event to delegate with detection metrics, GPS coordinates, and ML context.
-    // `timestamp` mirrors the iOS event map (see ios/Classes/LocationTracker.swift:639);
-    // without it, polyfence-flutter's bridge can't parse the event and emits a noisy
-    // "Invalid timestamp type: Null" error for every geofence transition.
-    //
-    // `dwellDurationMs` is populated only for DWELL events. For
-    // ENTER/EXIT/RECOVERY_* events the key is absent from the map —
-    // bridges surface it as undefined/null which matches the "only
-    // meaningful for dwell" semantic. Read against the same zoneEntryTimes
-    // map that the dwell-check writes into, so the value is exactly the
-    // time-in-zone the DWELL threshold just crossed.
-    val eventMap = mutableMapOf<String, Any>(
-        "zoneId" to zoneId,
-        "zoneName" to zoneName,
-        "eventType" to eventType,
-        "timestamp" to System.currentTimeMillis(),
-        "latitude" to location.latitude,
-        "longitude" to location.longitude,
-        "detectionTimeMs" to detectionTimeMs,
-        "gpsAccuracy" to gpsAccuracy,
-        "speedMps" to speedMps,
-        "activityAtEvent" to activityType,
-        "distanceToBoundaryM" to distanceToBoundary
-    )
-    if (eventType == GeofenceEngine.EVENT_DWELL) {
-        geofenceEngine.getDwellDurationMs(zoneId)?.let { dwellMs ->
-            eventMap["dwellDurationMs"] = dwellMs
+        // Boundary crossings only: dwell and the signal-lost/restored pair are
+        // state changes, not crossings, and counting them would inflate a figure
+        // consumers read as "how many times did the user cross a zone".
+        //
+        // Counts what this engine detected in this process. A crossing captured
+        // by an OS wake fence while the process was dead is delivered on drain
+        // without passing through here, so it reaches the consumer uncounted —
+        // counting it at capture would attribute it to whichever process the
+        // broadcast woke, and counting it at drain risks doubling with the
+        // reconcile that follows. Both need deciding together rather than
+        // patching one side.
+        //
+        // A detection time of zero marks a crossing the engine synthesised
+        // outside a location evaluation — a degraded-GPS exit. The consumer
+        // receives it like any other, so it counts; it was never timed, so it is
+        // passed as absent rather than as zero, which would drag the mean toward
+        // a speed nothing achieved.
+        if (eventType == "ENTER" || eventType == "EXIT" ||
+            eventType == GeofenceEngine.EVENT_RECOVERY_ENTER ||
+            eventType == GeofenceEngine.EVENT_RECOVERY_EXIT
+        ) {
+            PolyfenceDebugCollector.recordZoneDetection(
+                if (detectionTimeMs > 0) detectionTimeMs else null
+            )
         }
-    }
 
-    // Attempt live delivery only when all three conditions hold: a delegate is
-    // registered, the bridge's sink is wired, and a consumer is actually
-    // listening. The listener signal is load-bearing, not advisory. A bridge
-    // whose sink is wired but whose consumer has unsubscribed emits into
-    // nothing: RCTDeviceEventEmitter fans out to whoever registered, a nil
-    // FlutterEventSink swallows the call. Delivering there destroys the event
-    // and reports it delivered, so the crossing never reaches the durable
-    // queue either.
-    //
-    // A delegate that throws flips bridgeAttached to false and falls through to
-    // the persist branch, which recovers a bridge whose sink died without
-    // reporting it. That backstop cannot be relied on for bridges that marshal
-    // to another thread before touching their sink, since the delegate returns
-    // before delivery is attempted.
-    val delegate = coreDelegate
-    var deliveredLive = false
-    if (delegate != null && bridgeAttached && eventListenerActive) {
-        try {
-            delegate.onGeofenceEvent(eventMap)
-            deliveredLive = true
-        } catch (e: Exception) {
-            Log.w(TAG, "PF: delegate.onGeofenceEvent threw ${e.javaClass.simpleName}: ${e.message} — persisting instead")
-            bridgeAttached = false
-        }
-    }
-
-    // Persist to the durable queue if live delivery did not happen — either the
-    // delegate was missing, the bridge was detached, or the delivery attempt
-    // above threw. Guarded by pendingEventsQueueSize > 0 so consumers who never
-    // opt in see no change.
-    if (!deliveredLive && pendingEventsQueueSize > 0) {
-        val store = pendingEventsStore
-        if (store != null) {
-            val evicted = store.append(eventMap.toMap())
-            if (evicted > 0) {
-                PolyfenceErrorManager.reportError(
-                    type = "pending_events_evicted",
-                    message = "Pending events queue reached capacity; oldest events dropped",
-                    context = mapOf(
-                        "severity" to "warning",
-                        "droppedCount" to evicted,
-                        "platform" to "android"
-                    )
-                )
+        // Send event to delegate with detection metrics, GPS coordinates, and ML context.
+        // `timestamp` mirrors the iOS event map (see ios/Classes/LocationTracker.swift:639);
+        // without it, polyfence-flutter's bridge can't parse the event and emits a noisy
+        // "Invalid timestamp type: Null" error for every geofence transition.
+        //
+        // `dwellDurationMs` is populated only for DWELL events. For
+        // ENTER/EXIT/RECOVERY_* events the key is absent from the map —
+        // bridges surface it as undefined/null which matches the "only
+        // meaningful for dwell" semantic. Read against the same zoneEntryTimes
+        // map that the dwell-check writes into, so the value is exactly the
+        // time-in-zone the DWELL threshold just crossed.
+        val eventMap = mutableMapOf<String, Any>(
+            "zoneId" to zoneId,
+            "zoneName" to zoneName,
+            "eventType" to eventType,
+            "timestamp" to System.currentTimeMillis(),
+            "latitude" to location.latitude,
+            "longitude" to location.longitude,
+            "detectionTimeMs" to detectionTimeMs,
+            "gpsAccuracy" to gpsAccuracy,
+            "speedMps" to speedMps,
+            "activityAtEvent" to activityType,
+            "distanceToBoundaryM" to distanceToBoundary
+        )
+        if (eventType == GeofenceEngine.EVENT_DWELL) {
+            geofenceEngine.getDwellDurationMs(zoneId)?.let { dwellMs ->
+                eventMap["dwellDurationMs"] = dwellMs
             }
-        } else {
-            Log.w(TAG, "PF: queue enabled (size=$pendingEventsQueueSize) but store is nil — event dropped")
         }
+
+        // Attempt live delivery only when all three conditions hold: a delegate is
+        // registered, the bridge's sink is wired, and a consumer is actually
+        // listening. The listener signal is load-bearing, not advisory. A bridge
+        // whose sink is wired but whose consumer has unsubscribed emits into
+        // nothing: RCTDeviceEventEmitter fans out to whoever registered, a nil
+        // FlutterEventSink swallows the call. Delivering there destroys the event
+        // and reports it delivered, so the crossing never reaches the durable
+        // queue either.
+        //
+        // A delegate that throws flips bridgeAttached to false and falls through to
+        // the persist branch, which recovers a bridge whose sink died without
+        // reporting it. That backstop cannot be relied on for bridges that marshal
+        // to another thread before touching their sink, since the delegate returns
+        // before delivery is attempted.
+        val delegate = coreDelegate
+        var deliveredLive = false
+        if (delegate != null && bridgeAttached && eventListenerActive) {
+            try {
+                delegate.onGeofenceEvent(eventMap)
+                deliveredLive = true
+            } catch (e: Exception) {
+                Log.w(TAG, "PF: delegate.onGeofenceEvent threw ${e.javaClass.simpleName}: ${e.message} — persisting instead")
+                bridgeAttached = false
+            }
+        }
+
+        // Persist to the durable queue if live delivery did not happen — either the
+        // delegate was missing, the bridge was detached, or the delivery attempt
+        // above threw. Guarded by pendingEventsQueueSize > 0 so consumers who never
+        // opt in see no change.
+        if (!deliveredLive && pendingEventsQueueSize > 0) {
+            val store = pendingEventsStore
+            if (store != null) {
+                val evicted = store.append(eventMap.toMap())
+                if (evicted > 0) {
+                    PolyfenceErrorManager.reportError(
+                        type = "pending_events_evicted",
+                        message = "Pending events queue reached capacity; oldest events dropped",
+                        context = mapOf(
+                            "severity" to "warning",
+                            "droppedCount" to evicted,
+                            "platform" to "android"
+                        )
+                    )
+                }
+            } else {
+                Log.w(TAG, "PF: queue enabled (size=$pendingEventsQueueSize) but store is nil — event dropped")
+            }
+        }
+
+        // Terse geofence event log
+        val displayName = if (zoneName.isNotEmpty()) zoneName else zoneId
+        Log.i(TAG, "PF: EVENT $eventType zone=$displayName detection=${detectionTimeMs}ms speed=${speedMps}m/s activity=$activityType")
+
+        // Show notification with proper zone name
+        showGeofenceNotification(eventType, zoneId, zoneName)
+
     }
-
-    // Terse geofence event log
-    val displayName = if (zoneName.isNotEmpty()) zoneName else zoneId
-    Log.i(TAG, "PF: EVENT $eventType zone=$displayName detection=${detectionTimeMs}ms speed=${speedMps}m/s activity=$activityType")
-
-    // Show notification with proper zone name
-    showGeofenceNotification(eventType, zoneId, zoneName)
-
-}
 
     private fun sendLocationToDelegate(location: android.location.Location) {
         val locationData = mapOf(
@@ -1895,50 +1895,162 @@ private fun handleGeofenceEvent(zoneId: String, eventType: String, location: and
         coreDelegate?.onLocationUpdate(locationData)
     }
 
-    private fun showGeofenceNotification(eventType: String, zoneId: String, zoneName: String) {
-    if (!isRunning) return
-    if (!alertNotificationsEnabled) return  // Respect disableAlertNotifications config
-    // Zone name leads the title so the alert names the place, not our
-    // category. DWELL and RECOVERY_ENTER are inside-states — only a true
-    // EXIT / RECOVERY_EXIT reads as leaving.
-    val title = when (eventType) {
-        "ENTER", GeofenceEngine.EVENT_RECOVERY_ENTER -> "Entered $zoneName"
-        GeofenceEngine.EVENT_DWELL -> "Dwelling in $zoneName"
-        else -> "Exited $zoneName"
+    /**
+     * 
+     * ORIGINAL FUNCTION COMMENTED OUT 
+     * */
+    // private fun showGeofenceNotification(eventType: String, zoneId: String, zoneName: String) {
+    //     if (!isRunning) return
+    //     if (!alertNotificationsEnabled) return  // Respect disableAlertNotifications config
+    //     // Zone name leads the title so the alert names the place, not our
+    //     // category. DWELL and RECOVERY_ENTER are inside-states — only a true
+    //     // EXIT / RECOVERY_EXIT reads as leaving.
+    //     val title = when (eventType) {
+    //         "ENTER", GeofenceEngine.EVENT_RECOVERY_ENTER -> "Entered $zoneName"
+    //         GeofenceEngine.EVENT_DWELL -> "Dwelling in $zoneName"
+    //         else -> "Exited $zoneName"
+    //     }
+    //     // Body carries time-in-zone for DWELL only; ENTER/EXIT stay single-line.
+    //     val body: String? =
+    //         if (eventType == GeofenceEngine.EVENT_DWELL) formatDwellBody(zoneId) else null
+
+    //     // Create PendingIntent to reuse existing app task when notification is tapped
+    //     // Use dynamic package resolution instead of hardcoded class name
+    //     val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+    //         flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+    //     } ?: Intent().apply {
+    //         setPackage(packageName)
+    //         flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+    //     }
+
+    //     val pendingIntent = PendingIntent.getActivity(
+    //         this,
+    //         0,
+    //         intent,
+    //         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    //     )
+
+    //     val builder = NotificationCompat.Builder(this, GEOFENCE_CHANNEL_ID)
+    //         .setContentTitle(title)
+    //         .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+    //         .setContentIntent(pendingIntent) // Opens app on tap
+    //         .setAutoCancel(true) // Dismisses notification on tap
+    //         .setPriority(NotificationCompat.PRIORITY_HIGH)
+    //         .setDefaults(NotificationCompat.DEFAULT_ALL)
+    //     if (body != null) builder.setContentText(body)
+    //     val notification = builder.build()
+
+    //     val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    //     notificationManager.notify(System.currentTimeMillis().toInt(), notification)
+    // }
+
+    /**
+     * MODIFIED FUNCTION FOR MY USE CASE
+     * THE PREVIOUS COMMENTED CODE IS THE OLD UNCHANGED FUNCTION
+     * */
+     private fun showGeofenceNotification(eventType: String, zoneId: String, zoneName: String) {
+        if (!isRunning) return
+        if (!alertNotificationsEnabled) return
+
+        val zoneData = zonePersistence.loadZoneData(zoneId)
+        @Suppress("UNCHECKED_CAST")
+        val metadata = zoneData?.get("metadata") as? Map<String, String>
+
+        val defaultTitle = when (eventType) {
+            "ENTER", GeofenceEngine.EVENT_RECOVERY_ENTER -> "Entered $zoneName"
+            GeofenceEngine.EVENT_DWELL -> "Dwelling in $zoneName"
+            else -> "Exited $zoneName"
+        }
+        val title = metadata?.get("notifTitle")?.takeIf { it.isNotBlank() } ?: defaultTitle
+
+        // --- Moment filter: trivial ---
+        val now = java.util.Calendar.getInstance()
+        val dayKey = when (now.get(java.util.Calendar.DAY_OF_WEEK)) {
+            java.util.Calendar.SUNDAY -> "Su"
+            java.util.Calendar.MONDAY -> "Mo"
+            java.util.Calendar.TUESDAY -> "Tu"
+            java.util.Calendar.WEDNESDAY -> "We"
+            java.util.Calendar.THURSDAY -> "Th"
+            java.util.Calendar.FRIDAY -> "Fr"
+            else -> "Sa"
+        }
+        val nowHM = "%02d:%02d".format(
+            now.get(java.util.Calendar.HOUR_OF_DAY),
+            now.get(java.util.Calendar.MINUTE)
+        )
+
+        val activeNotes = parseActiveNotes(metadata?.get("notesByDay"), dayKey, nowHM)
+
+        // --- Build body / style ---
+        val fallbackBody = metadata?.get("notifFallbackBody") ?: "No reminders right now"
+        val body: String?
+        val style: NotificationCompat.Style?
+
+        if (activeNotes.isEmpty()) {
+            body = if (eventType == GeofenceEngine.EVENT_DWELL) formatDwellBody(zoneId) else fallbackBody
+            style = null
+        } else {
+            body = "${activeNotes.size} reminder${if (activeNotes.size == 1) "" else "s"}"
+            val inbox = NotificationCompat.InboxStyle().setBigContentTitle(title)
+            activeNotes.take(3).forEach { inbox.addLine("• ${it.first}") }
+            if (activeNotes.size > 3) inbox.addLine("… and ${activeNotes.size - 3} more")
+            style = inbox
+        }
+
+        // --- Intent ---
+        val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra("zoneId", zoneId)
+            putExtra("eventType", eventType)
+        } ?: Intent().apply {
+            setPackage(packageName)
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val builder = NotificationCompat.Builder(this, GEOFENCE_CHANNEL_ID)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+
+        style?.let { builder.setStyle(it) }
+
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(System.currentTimeMillis().toInt(), builder.build())
     }
-    // Body carries time-in-zone for DWELL only; ENTER/EXIT stay single-line.
-    val body: String? =
-        if (eventType == GeofenceEngine.EVENT_DWELL) formatDwellBody(zoneId) else null
 
-    // Create PendingIntent to reuse existing app task when notification is tapped
-    // Use dynamic package resolution instead of hardcoded class name
-    val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
-        flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-    } ?: Intent().apply {
-        setPackage(packageName)
-        flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+    /**
+     * Parses the JSON string produced by JS and returns today's notes that fall
+     * within the current time window. Returns pairs of (title, iconName).
+     */
+    private fun parseActiveNotes(notesByDayJson: String?, dayKey: String, nowHM: String): List<Pair<String, String>> {
+        if (notesByDayJson.isNullOrBlank()) return emptyList()
+        return try {
+            val root = org.json.JSONObject(notesByDayJson)
+            val dayArr = root.optJSONArray(dayKey) ?: return emptyList()
+            val out = mutableListOf<Pair<String, String>>()
+            for (i in 0 until dayArr.length()) {
+                val n = dayArr.getJSONObject(i)
+                val s = n.optString("s", "")
+                val e = n.optString("e", "")
+                if (s.isEmpty() || e.isEmpty()) continue
+                if (s <= nowHM && nowHM <= e) {
+                    out.add(n.optString("t", "Reminder") to n.optString("i", ""))
+                }
+            }
+            out
+        } catch (ex: Exception) {
+            Log.w(TAG, "Failed to parse notesByDay: ${ex.message}")
+            emptyList()
+        }
     }
-
-    val pendingIntent = PendingIntent.getActivity(
-        this,
-        0,
-        intent,
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-    )
-
-    val builder = NotificationCompat.Builder(this, GEOFENCE_CHANNEL_ID)
-        .setContentTitle(title)
-        .setSmallIcon(android.R.drawable.ic_menu_mylocation)
-        .setContentIntent(pendingIntent) // Opens app on tap
-        .setAutoCancel(true) // Dismisses notification on tap
-        .setPriority(NotificationCompat.PRIORITY_HIGH)
-        .setDefaults(NotificationCompat.DEFAULT_ALL)
-    if (body != null) builder.setContentText(body)
-    val notification = builder.build()
-
-    val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-    notificationManager.notify(System.currentTimeMillis().toInt(), notification)
-}
 
     /**
      * Human-readable "time in zone" line for DWELL alerts, e.g. "Here 12 min".
